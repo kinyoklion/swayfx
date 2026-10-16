@@ -760,6 +760,7 @@ void server_fini(struct sway_server *server) {
 
 bool server_start(struct sway_server *server) {
 #if WLR_HAS_XWAYLAND
+	server->xwayland_scale = 1.0;
 	if (config->xwayland != XWAYLAND_MODE_DISABLED) {
 		sway_log(SWAY_DEBUG, "Initializing Xwayland (lazy=%d)",
 				config->xwayland == XWAYLAND_MODE_LAZY);

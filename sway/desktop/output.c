@@ -488,6 +488,10 @@ void update_output_manager_config(struct sway_server *server) {
 
 	wlr_output_manager_v1_set_configuration(server->output_manager_v1, config);
 
+#if WLR_HAS_XWAYLAND
+	xwayland_scale_update();
+#endif
+
 	ipc_event_output();
 }
 

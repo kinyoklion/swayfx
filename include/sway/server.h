@@ -63,6 +63,9 @@ struct sway_server {
 	struct sway_xwayland xwayland;
 	struct wl_listener xwayland_surface;
 	struct wl_listener xwayland_ready;
+	// Global Xwayland scale S (X11-native = logical * S); 1.0 when scaling
+	// is off. Access via xwayland_scale()/xwayland_scale_update().
+	double xwayland_scale;
 #endif
 
 	struct wlr_relative_pointer_manager_v1 *relative_pointer_manager;

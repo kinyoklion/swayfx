@@ -486,6 +486,12 @@ enum xwayland_mode {
 	XWAYLAND_MODE_IMMEDIATE,
 };
 
+enum xwayland_scaling_mode {
+	XWAYLAND_SCALING_OFF,
+	XWAYLAND_SCALING_AUTO,
+	XWAYLAND_SCALING_FIXED,
+};
+
 /**
  * The configuration struct. The result of loading a config file.
  */
@@ -554,6 +560,11 @@ struct sway_config {
 	enum sway_fowa focus_on_window_activation;
 	enum sway_popup_during_fullscreen popup_during_fullscreen;
 	enum xwayland_mode xwayland;
+
+	// Xwayland "clients scale themselves" support
+	enum xwayland_scaling_mode xwayland_scaling;
+	float xwayland_scaling_factor; // for XWAYLAND_SCALING_FIXED
+	char *xwayland_scale_command;
 
 	// swaybg
 	char *swaybg_command;

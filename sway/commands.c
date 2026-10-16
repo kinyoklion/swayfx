@@ -122,6 +122,8 @@ static const struct cmd_handler handlers[] = {
 	{ "unbindsym", cmd_unbindsym },
 	{ "workspace", cmd_workspace },
 	{ "workspace_auto_back_and_forth", cmd_ws_auto_back_and_forth },
+	{ "xwayland_scale_command", cmd_xwayland_scale_command },
+	{ "xwayland_scaling", cmd_xwayland_scaling },
 };
 
 /* Config-time only commands. Keep alphabetized */

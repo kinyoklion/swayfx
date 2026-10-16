@@ -1,4 +1,5 @@
 #include <float.h>
+#include <math.h>
 #include <scenefx/types/wlr_scene.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -50,7 +51,8 @@ static void unmanaged_handle_set_geometry(struct wl_listener *listener, void *da
 		wl_container_of(listener, surface, set_geometry);
 	struct wlr_xwayland_surface *xsurface = surface->wlr_xwayland_surface;
 
-	wlr_scene_node_set_position(&surface->surface_scene->buffer->node, xsurface->x, xsurface->y);
+	wlr_scene_node_set_position(&surface->surface_scene->buffer->node,
+		xwayland_scale_from_x(xsurface->x), xwayland_scale_from_x(xsurface->y));
 }
 
 static void unmanaged_handle_map(struct wl_listener *listener, void *data) {
@@ -65,7 +67,8 @@ static void unmanaged_handle_map(struct wl_listener *listener, void *data) {
 		scene_descriptor_assign(&surface->surface_scene->buffer->node,
 			SWAY_SCENE_DESC_XWAYLAND_UNMANAGED, surface);
 		wlr_scene_node_set_position(&surface->surface_scene->buffer->node,
-			xsurface->x, xsurface->y);
+			xwayland_scale_from_x(xsurface->x),
+			xwayland_scale_from_x(xsurface->y));
 
 		wl_signal_add(&xsurface->events.set_geometry, &surface->set_geometry);
 		surface->set_geometry.notify = unmanaged_handle_set_geometry;
@@ -272,7 +275,9 @@ static uint32_t configure(struct sway_view *view, double lx, double ly, int widt
 	}
 	struct wlr_xwayland_surface *xsurface = view->wlr_xwayland_surface;
 
-	wlr_xwayland_surface_configure(xsurface, lx, ly, width, height);
+	wlr_xwayland_surface_configure(xsurface,
+		xwayland_scale_to_x(lx), xwayland_scale_to_x(ly),
+		xwayland_scale_to_x(width), xwayland_scale_to_x(height));
 
 	// xwayland doesn't give us a serial for the configure
 	return 0;
@@ -392,10 +397,14 @@ static void get_constraints(struct sway_view *view, double *min_width,
 		return;
 	}
 
-	*min_width = size_hints->min_width > 0 ? size_hints->min_width : DBL_MIN;
-	*max_width = size_hints->max_width > 0 ? size_hints->max_width : DBL_MAX;
-	*min_height = size_hints->min_height > 0 ? size_hints->min_height : DBL_MIN;
-	*max_height = size_hints->max_height > 0 ? size_hints->max_height : DBL_MAX;
+	*min_width = size_hints->min_width > 0 ?
+		xwayland_scale_from_x(size_hints->min_width) : DBL_MIN;
+	*max_width = size_hints->max_width > 0 ?
+		xwayland_scale_from_x(size_hints->max_width) : DBL_MAX;
+	*min_height = size_hints->min_height > 0 ?
+		xwayland_scale_from_x(size_hints->min_height) : DBL_MIN;
+	*max_height = size_hints->max_height > 0 ?
+		xwayland_scale_from_x(size_hints->max_height) : DBL_MAX;
 }
 
 static const struct sway_view_impl view_impl = {
@@ -419,9 +428,10 @@ static void handle_commit(struct wl_listener *listener, void *data) {
 	struct wlr_xwayland_surface *xsurface = view->wlr_xwayland_surface;
 	struct wlr_surface_state *state = &xsurface->surface->current;
 
+	// Surface state is in X11-native units; view geometry is logical.
 	struct wlr_box new_geo = {0};
-	new_geo.width = state->width;
-	new_geo.height = state->height;
+	new_geo.width = round(xwayland_scale_from_x(state->width));
+	new_geo.height = round(xwayland_scale_from_x(state->height));
 
 	bool new_size = new_geo.width != view->geometry.width ||
 			new_geo.height != view->geometry.height;
@@ -441,7 +451,10 @@ static void handle_commit(struct wl_listener *listener, void *data) {
 
 	if (view->container->node.instruction) {
 		bool successful = transaction_notify_view_ready_by_geometry(view,
-				xsurface->x, xsurface->y, state->width, state->height);
+				xwayland_scale_from_x(xsurface->x),
+				xwayland_scale_from_x(xsurface->y),
+				round(xwayland_scale_from_x(state->width)),
+				round(xwayland_scale_from_x(state->height)));
 
 		// If we saved the view and this commit isn't what we're looking for
 		// that means the user will never actually see the buffers submitted to
@@ -520,8 +533,8 @@ static void handle_map(struct wl_listener *listener, void *data) {
 	struct sway_view *view = &xwayland_view->view;
 	struct wlr_xwayland_surface *xsurface = view->wlr_xwayland_surface;
 
-	view->natural_width = xsurface->width;
-	view->natural_height = xsurface->height;
+	view->natural_width = round(xwayland_scale_from_x(xsurface->width));
+	view->natural_height = round(xwayland_scale_from_x(xsurface->height));
 
 	// Wire up the commit listener here, because xwayland map/unmap can change
 	// the underlying wlr_surface
@@ -588,8 +601,8 @@ static void handle_request_configure(struct wl_listener *listener, void *data) {
 	}
 	if (container_is_floating(view->container)) {
 		// Respect minimum and maximum sizes
-		view->natural_width = ev->width;
-		view->natural_height = ev->height;
+		view->natural_width = round(xwayland_scale_from_x(ev->width));
+		view->natural_height = round(xwayland_scale_from_x(ev->height));
 		container_floating_resize_and_center(view->container);
 
 		configure(view, view->container->pending.content_x,
@@ -916,6 +929,10 @@ void handle_xwayland_ready(struct wl_listener *listener, void *data) {
 	struct sway_server *server =
 		wl_container_of(listener, server, xwayland_ready);
 	struct sway_xwayland *xwayland = &server->xwayland;
+
+	// The Xwayland wl_client exists now (and may be new after a restart):
+	// (re-)apply the scale override and run the scale command.
+	xwayland_scale_handle_ready();
 
 	xcb_connection_t *xcb_conn = xcb_connect(NULL, NULL);
 	int err = xcb_connection_has_error(xcb_conn);

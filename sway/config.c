@@ -183,6 +183,7 @@ void free_config(struct sway_config *config) {
 	free(config->font);
 	free(config->swaybg_command);
 	free(config->swaynag_command);
+	free(config->xwayland_scale_command);
 	free((char *)config->current_config_path);
 	free((char *)config->current_config);
 	keysym_translation_state_destroy(config->keysym_translation_state);
@@ -264,6 +265,9 @@ static void config_defaults(struct sway_config *config) {
 	config->focus_on_window_activation = FOWA_URGENT;
 	config->popup_during_fullscreen = POPUP_SMART;
 	config->xwayland = XWAYLAND_MODE_LAZY;
+	config->xwayland_scaling = XWAYLAND_SCALING_OFF;
+	config->xwayland_scaling_factor = 1.0f;
+	config->xwayland_scale_command = NULL;
 
 	config->titlebar_border_thickness = 1;
 	config->titlebar_h_padding = 5;

@@ -103,6 +103,21 @@ The following commands may only be used in the configuration file.
 	machines, it may be desirable to have Xwayland started immediately by
 	using _force_ instead of _enable_.
 
+*xwayland_scaling* off|auto|<factor>
+	Lets X11 applications apply output scaling themselves instead of being
+	upscaled (and blurred) by the compositor. With _auto_, the scale factor is
+	the maximum scale of all outputs; a fixed _factor_ may be given instead.
+	X11 applications see the world in device pixels and are told the effective
+	DPI via the X resource database (see _xwayland_scale_command_); apps that
+	honor it render crisp, apps that ignore it render small. Defaults to
+	_off_, which preserves the traditional behavior.
+
+*xwayland_scale_command* <command>
+	Command run (via sh -c) when Xwayland becomes ready and whenever the
+	Xwayland scale factor changes, with SWAY_XWAYLAND_SCALE set to the current
+	factor. Typically a script that merges Xft.dpi and Xcursor.size into the X
+	resource database with xrdb(1).
+
 ## Runtime only commands
 The following commands cannot be used directly in the configuration file.
 They are expected to be used with *bindsym* or at runtime through *swaymsg*(1).
