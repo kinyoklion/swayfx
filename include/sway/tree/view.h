@@ -332,6 +332,12 @@ struct sway_view *view_from_wlr_xwayland_surface(
 #endif
 struct sway_view *view_from_wlr_surface(struct wlr_surface *surface);
 
+/**
+ * Factor between logical coordinates and a surface's local coordinates: the
+ * Xwayland scale for Xwayland surfaces (X11-native = logical * S), else 1.0.
+ */
+double surface_coord_scale(struct wlr_surface *surface);
+
 void view_update_app_id(struct sway_view *view);
 
 /**

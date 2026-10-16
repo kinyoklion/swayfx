@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdlib.h>
 #include <strings.h>
 #include <wayland-server-core.h>
@@ -15,6 +16,7 @@
 #include <wlr/types/wlr_session_lock_v1.h>
 #if WLR_HAS_XWAYLAND
 #include <wlr/xwayland.h>
+#include "sway/xwayland.h"
 #endif
 #include "list.h"
 #include "log.h"
@@ -1091,9 +1093,30 @@ void view_center_and_clip_surface(struct sway_view *view) {
 				.width = con->current.content_width,
 				.height = con->current.content_height,
 			};
+#if WLR_HAS_XWAYLAND
+			// The clip is in surface-local units, which for Xwayland
+			// surfaces are X11-native (logical * S).
+			if (view->type == SWAY_VIEW_XWAYLAND) {
+				double scale = xwayland_scale();
+				clip.x = round(clip.x * scale);
+				clip.y = round(clip.y * scale);
+				clip.width = round(clip.width * scale);
+				clip.height = round(clip.height * scale);
+			}
+#endif
 		}
 		wlr_scene_subsurface_tree_set_clip(&con->view->content_tree->node, &clip);
 	}
+}
+
+double surface_coord_scale(struct wlr_surface *surface) {
+#if WLR_HAS_XWAYLAND
+	if (surface != NULL &&
+			wlr_xwayland_surface_try_from_wlr_surface(surface) != NULL) {
+		return xwayland_scale();
+	}
+#endif
+	return 1.0;
 }
 
 struct sway_view *view_from_wlr_surface(struct wlr_surface *wlr_surface) {

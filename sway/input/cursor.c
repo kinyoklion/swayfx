@@ -306,14 +306,17 @@ void pointer_motion(struct sway_cursor *cursor, uint32_t time_msec,
 			return;
 		}
 
+		// The confine region and sx/sy are surface-local; dx/dy are logical.
+		double scale = surface_coord_scale(surface);
 		double sx_confined, sy_confined;
-		if (!wlr_region_confine(&cursor->confine, sx, sy, sx + dx, sy + dy,
+		if (!wlr_region_confine(&cursor->confine, sx, sy,
+				sx + dx * scale, sy + dy * scale,
 				&sx_confined, &sy_confined)) {
 			return;
 		}
 
-		dx = sx_confined - sx;
-		dy = sy_confined - sy;
+		dx = (sx_confined - sx) / scale;
+		dy = (sy_confined - sy) / scale;
 	}
 
 	wlr_cursor_move(cursor->cursor, device, dx, dy);
@@ -818,9 +821,11 @@ static void check_constraint_region(struct sway_cursor *cursor) {
 		cursor->active_confine_requires_warp = false;
 
 		struct sway_container *con = view->container;
+		// The region is surface-local (X11-native for Xwayland surfaces).
+		double scale = surface_coord_scale(constraint->surface);
 
-		double sx = cursor->cursor->x - con->pending.content_x + view->geometry.x;
-		double sy = cursor->cursor->y - con->pending.content_y + view->geometry.y;
+		double sx = (cursor->cursor->x - con->pending.content_x + view->geometry.x) * scale;
+		double sy = (cursor->cursor->y - con->pending.content_y + view->geometry.y) * scale;
 
 		if (!pixman_region32_contains_point(region,
 				floor(sx), floor(sy), NULL)) {
@@ -831,8 +836,8 @@ static void check_constraint_region(struct sway_cursor *cursor) {
 				double sy = (boxes[0].y1 + boxes[0].y2) / 2.;
 
 				wlr_cursor_warp_closest(cursor->cursor, NULL,
-					sx + con->pending.content_x - view->geometry.x,
-					sy + con->pending.content_y - view->geometry.y);
+					sx / scale + con->pending.content_x - view->geometry.x,
+					sy / scale + con->pending.content_y - view->geometry.y);
 
 				cursor_rebase(cursor);
 			}
@@ -1283,9 +1288,11 @@ static void warp_to_constraint_cursor_hint(struct sway_cursor *cursor) {
 		}
 
 		struct sway_container *con = view->container;
+		// The hint is surface-local (X11-native for Xwayland surfaces).
+		double scale = surface_coord_scale(constraint->surface);
 
-		double lx = sx + con->pending.content_x - view->geometry.x;
-		double ly = sy + con->pending.content_y - view->geometry.y;
+		double lx = sx / scale + con->pending.content_x - view->geometry.x;
+		double ly = sy / scale + con->pending.content_y - view->geometry.y;
 
 		wlr_cursor_warp(cursor->cursor, NULL, lx, ly);
 
