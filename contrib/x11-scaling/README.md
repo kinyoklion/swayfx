@@ -1,8 +1,8 @@
-| `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the release tag in `wlroots/UPSTREAM_REV` (wlroots 0.20.0). scenefx needs no patch: it reuses wlroots' own scene-surface code (`types/scene/surface.c`), which is where the scene-side change lives. |# X11 self-scaling for swayfx (`xwayland_scaling`)
+# X11 self-scaling for swayfx (`xwayland_scaling`)
 
 This branch adds KDE-style "X11 applications apply scaling themselves" to
 swayfx (ported from the sway branch at <https://github.com/kinyoklion/sway>,
-branch `x11-scaling`). On hidpi outputs, stock sway/wlroots upscale Xwayland windows and they
+branch `master`). On hidpi outputs, stock sway/wlroots upscale Xwayland windows and they
 come out blurry. With `xwayland_scaling`, Xwayland is handed a server-side
 scale override `S` (the maximum output scale, or a fixed factor) and X11
 clients see a screen of `logical * S` pixels, so toolkits that honor `Xft.dpi`
@@ -28,7 +28,7 @@ mechanism is:
 
 | Path | Purpose |
 |---|---|
-| `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the commit in `wlroots/UPSTREAM_REV` (wlroots 0.21.0-dev). |
+| `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the release tag in `wlroots/UPSTREAM_REV` (wlroots 0.20.0). scenefx needs no patch: it reuses wlroots' own scene-surface code (`types/scene/surface.c`), which is where the scene-side change lives. |
 | `sway-xwayland-setup` | Helper for `xwayland_scale_command`: merges `Xft.dpi = 96*S` and `Xcursor.size = base*S` into the X resource database with `xrdb`. |
 | `nested-test.conf` | Config for trying the feature nested inside an existing session. |
 
@@ -56,6 +56,9 @@ git am ../swayfx/contrib/x11-scaling/wlroots/*.patch
 Then build swayfx as usual (`meson setup build && ninja -C build`), either
 against an installed patched wlroots or with `subprojects/wlroots` pointing
 at the patched checkout.
+
+The `x11-scaling-0.20` branch of <https://github.com/kinyoklion/wlroots> already
+has this patch. As an alternative, clone that branch and do not apply the patch.
 
 ### NixOS sketch
 
@@ -98,7 +101,8 @@ with `xwayland_scaling auto`. `Mod4+Return` starts `xterm`, `Mod4+d` prints
 
 ## Updating the wlroots patch
 
-From a wlroots checkout with the work on branch `x11-scaling`:
+From a checkout of <https://github.com/kinyoklion/wlroots>, branch
+`x11-scaling-0.20`:
 
 ```
 git format-patch -o ../swayfx/contrib/x11-scaling/wlroots 0.20.0..x11-scaling-0.20

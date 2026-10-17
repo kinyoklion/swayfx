@@ -1,3 +1,59 @@
+# Fork notice
+
+This repository is a fork of [SwayFX](https://github.com/WillPower3309/swayfx).
+The default branch, `master`, has the upstream code and one additional
+feature: scale control for X11 windows. The feature is a port from
+[kinyoklion/sway](https://github.com/kinyoklion/sway).
+
+## Purpose of the fork
+
+Standard SwayFX shows X11 windows at scale 1. On a HiDPI output, SwayFX then
+makes the windows larger. The image is not clear.
+
+This fork permits the X11 clients to draw at the scale of the output. SwayFX
+then shows each window at the correct size, and the image is clear. KDE Plasma
+uses the same method.
+
+The feature adds two configuration commands:
+
+- `xwayland_scaling off|auto|<factor>` sets the scale for the X11 clients. The
+  default is `off`.
+- `xwayland_scale_command <command>` starts a command each time the scale
+  changes. The command gets the scale in the `SWAY_XWAYLAND_SCALE` environment
+  variable.
+
+One change is only for SwayFX. SwayFX sets the clip of each window again when
+it arranges the windows. This fork converts that clip to the units of the X11
+client.
+
+A change to wlroots 0.20 is also necessary for this feature. The change is in
+the patch file in `contrib/x11-scaling/wlroots/`. The same change is in the
+`x11-scaling-0.20` branch of
+[kinyoklion/wlroots](https://github.com/kinyoklion/wlroots). A change to
+scenefx is not necessary.
+
+## Branches
+
+- `master` is the default branch. It has upstream SwayFX and the feature.
+- `x11-scaling` has the feature on the upstream commit of the first tests. Use
+  `master` for new work.
+
+## Related repositories
+
+- [kinyoklion/sway](https://github.com/kinyoklion/sway): sway with the same
+  feature. This is the source of the port.
+- [kinyoklion/wlroots](https://github.com/kinyoklion/wlroots): wlroots with
+  the necessary change.
+
+## More information
+
+Read [contrib/x11-scaling/README.md](contrib/x11-scaling/README.md). It gives
+the design, the build procedure, and the test procedure.
+
+The text that follows is the upstream README.
+
+---
+
 <p align="center">
     <img src="assets/swayfx_logo.svg" width="256" alt="swayfx logo">
 </p>
