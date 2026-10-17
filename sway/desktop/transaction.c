@@ -1,3 +1,4 @@
+#include <math.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -17,6 +18,9 @@
 #include "sway/tree/container.h"
 #include "sway/tree/node.h"
 #include "sway/tree/view.h"
+#if WLR_HAS_XWAYLAND
+#include "sway/xwayland.h"
+#endif
 #include "sway/tree/workspace.h"
 #include "list.h"
 #include "log.h"
@@ -676,6 +680,17 @@ static void _arrange_container(struct sway_container *con,
 				.width = content_width,
 				.height = content_height,
 			};
+#if WLR_HAS_XWAYLAND
+			// The clip is in surface-local units, which for Xwayland
+			// surfaces are X11-native (logical * S).
+			if (con->view->type == SWAY_VIEW_XWAYLAND) {
+				double scale = xwayland_scale();
+				clip.x = round(clip.x * scale);
+				clip.y = round(clip.y * scale);
+				clip.width = round(clip.width * scale);
+				clip.height = round(clip.height * scale);
+			}
+#endif
 			wlr_scene_subsurface_tree_set_clip(&con->view->content_tree->node, &clip);
 		}
 		con->animation_state.current_content_width = content_width;
