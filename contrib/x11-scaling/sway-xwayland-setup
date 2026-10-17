@@ -1,0 +1,24 @@
+#!/bin/sh
+# Portable reimplementation of KDE's plasma-setup-xwayland (see research doc §5).
+# Publishes the Xwayland scale factor to X11 toolkits via the X resource
+# database: Xft.dpi = 96*S, Xcursor.size = base*S.
+#
+# Usage: sway-xwayland-setup [scale]
+# Falls back to $SWAY_XWAYLAND_SCALE (set by sway's xwayland_scale_command
+# hook), then to 1.
+set -eu
+
+scale="${1:-${SWAY_XWAYLAND_SCALE:-1}}"
+base_cursor="${XCURSOR_SIZE:-24}"
+
+dpi=$(awk -v s="$scale" 'BEGIN { printf "%d", 96 * s }')
+cursor=$(awk -v s="$scale" -v c="$base_cursor" 'BEGIN { printf "%d", c * s }')
+
+{
+    printf 'Xft.dpi: %s\n' "$dpi"
+    printf 'Xcursor.size: %s\n' "$cursor"
+    [ -n "${XCURSOR_THEME:-}" ] && printf 'Xcursor.theme: %s\n' "$XCURSOR_THEME"
+} | xrdb -quiet -merge
+
+# Note: KDE's helper also sets the root-window cursor via xcb; skipped here.
+# Note: a running XSETTINGS daemon (xsettingsd) overrides Xft.dpi for GTK apps.

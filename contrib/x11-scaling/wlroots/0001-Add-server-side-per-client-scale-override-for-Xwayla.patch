@@ -1,0 +1,259 @@
+From d2ffb75b6d4b5c4d785418feb2b0b95920425d78 Mon Sep 17 00:00:00 2001
+From: Ryan Lamb <4955475+kinyoklion@users.noreply.github.com>
+Date: Fri, 16 Oct 2026 16:17:32 -0700
+Subject: [PATCH] Add server-side per-client scale override for Xwayland
+ self-scaling
+
+Companion to sway's `xwayland_scaling`: lets the compositor register one
+client (Xwayland) whose buffers are S times denser than their nominal size,
+the mechanism behind KDE's "X11 applications apply scaling themselves".
+
+- util/server_scale.c: wlr_server_scale_set()/wlr_server_scale_get(),
+  single-client global with a destroy listener.
+- types/scene/surface.c: display the client's buffers at 1/S (dest size,
+  opaque region), map surface-local input coordinates by S, and skip
+  fractional-scale/preferred-buffer-scale notifications for it.
+- types/wlr_xdg_output_v1.c: send logical geometry multiplied by S to that
+  client; add wlr_xdg_output_manager_v1_resend() for scale changes.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ include/wlr/types/wlr_xdg_output_v1.h |  7 ++++++
+ include/wlr/util/server_scale.h       | 33 +++++++++++++++++++++++++
+ types/scene/surface.c                 | 35 ++++++++++++++++++++++++---
+ types/wlr_xdg_output_v1.c             | 20 +++++++++++++--
+ util/meson.build                      |  1 +
+ util/server_scale.c                   | 35 +++++++++++++++++++++++++++
+ 6 files changed, 125 insertions(+), 6 deletions(-)
+ create mode 100644 include/wlr/util/server_scale.h
+ create mode 100644 util/server_scale.c
+
+diff --git a/include/wlr/types/wlr_xdg_output_v1.h b/include/wlr/types/wlr_xdg_output_v1.h
+index 4ee8ec3..48c2c1a 100644
+--- a/include/wlr/types/wlr_xdg_output_v1.h
++++ b/include/wlr/types/wlr_xdg_output_v1.h
+@@ -48,4 +48,11 @@ struct wlr_xdg_output_manager_v1 {
+ struct wlr_xdg_output_manager_v1 *wlr_xdg_output_manager_v1_create(
+ 	struct wl_display *display, struct wlr_output_layout *layout);
+ 
++/**
++ * Re-send logical position/size to every bound xdg-output resource, e.g.
++ * after a client's server-side scale override changed (see
++ * wlr_server_scale_set()).
++ */
++void wlr_xdg_output_manager_v1_resend(struct wlr_xdg_output_manager_v1 *manager);
++
+ #endif
+diff --git a/include/wlr/util/server_scale.h b/include/wlr/util/server_scale.h
+new file mode 100644
+index 0000000..80bd142
+--- /dev/null
++++ b/include/wlr/util/server_scale.h
+@@ -0,0 +1,33 @@
++/*
++ * This an unstable interface of wlroots. No guarantees are made regarding the
++ * future consistency of this API.
++ */
++#ifndef WLR_USE_UNSTABLE
++#error "Add -DWLR_USE_UNSTABLE to enable unstable API usage"
++#endif
++
++#ifndef WLR_UTIL_SERVER_SCALE_H
++#define WLR_UTIL_SERVER_SCALE_H
++
++#include <wayland-server-core.h>
++
++/**
++ * Register a client whose surfaces get a server-side scale override, the
++ * mechanism behind "X11 clients apply scaling themselves": committed buffers
++ * are displayed at 1/scale of their nominal size (treated as scale times
++ * denser), and coordinates exchanged with the client (surface-local input,
++ * xdg-output logical geometry) are multiplied by scale.
++ *
++ * Intended for the compositor's Xwayland connection. Only a single client at
++ * a time is supported; pass NULL to clear the registration. The registration
++ * is cleared automatically when the client is destroyed.
++ */
++void wlr_server_scale_set(struct wl_client *client, double scale);
++
++/**
++ * Get the scale override for a client. Returns 1.0 for unregistered clients
++ * and NULL.
++ */
++double wlr_server_scale_get(const struct wl_client *client);
++
++#endif
+diff --git a/types/scene/surface.c b/types/scene/surface.c
+index e6ea133..6d351ab 100644
+--- a/types/scene/surface.c
++++ b/types/scene/surface.c
+@@ -10,6 +10,8 @@
+ #include <wlr/types/wlr_output.h>
+ #include <wlr/types/wlr_presentation_time.h>
+ #include <wlr/types/wlr_single_pixel_buffer_v1.h>
++#include <wlr/util/region.h>
++#include <wlr/util/server_scale.h>
+ #include <wlr/util/transform.h>
+ #include "types/wlr_scene.h"
+ 
+@@ -132,9 +134,13 @@ static void handle_scene_buffer_outputs_update(
+ 		wlr_surface_send_enter(surface->surface, event->active[i]->output);
+ 	}
+ 
+-	double scale = get_surface_preferred_buffer_scale(surface->surface);
+-	wlr_fractional_scale_v1_notify_scale(surface->surface, scale);
+-	wlr_surface_set_preferred_buffer_scale(surface->surface, ceil(scale));
++	// Clients with a server-side scale override are already rendered at native
++	// density; don't ask them to scale on top of that.
++	if (wlr_server_scale_get(wl_resource_get_client(surface->surface->resource)) == 1.0) {
++		double scale = get_surface_preferred_buffer_scale(surface->surface);
++		wlr_fractional_scale_v1_notify_scale(surface->surface, scale);
++		wlr_surface_set_preferred_buffer_scale(surface->surface, ceil(scale));
++	}
+ 
+ 	if (scene->color_manager_v1 != NULL) {
+ 		struct wlr_image_description_v1_data img_desc = {0};
+@@ -298,9 +304,22 @@ static void surface_reconfigure(struct wlr_scene_surface *scene_surface) {
+ 		}
+ 	}
+ 
++	// Server-side scale override (Xwayland "clients scale themselves"): the
++	// committed buffer is scale times denser than its nominal size — display
++	// it at 1/scale and shrink surface-space regions to match.
++	double server_scale = wlr_server_scale_get(wl_resource_get_client(surface->resource));
++	int dest_width = width;
++	int dest_height = height;
++	if (server_scale != 1.0) {
++		dest_width = round(width / server_scale);
++		dest_height = round(height / server_scale);
++		wlr_region_scale(&opaque, &opaque, 1.0 / server_scale);
++		pixman_region32_intersect_rect(&opaque, &opaque, 0, 0, dest_width, dest_height);
++	}
++
+ 	wlr_scene_buffer_set_opaque_region(scene_buffer, &opaque);
+ 	wlr_scene_buffer_set_source_box(scene_buffer, &src_box);
+-	wlr_scene_buffer_set_dest_size(scene_buffer, width, height);
++	wlr_scene_buffer_set_dest_size(scene_buffer, dest_width, dest_height);
+ 	wlr_scene_buffer_set_transform(scene_buffer, state->transform);
+ 	wlr_scene_buffer_set_opacity(scene_buffer, opacity);
+ 	wlr_scene_buffer_set_transfer_function(scene_buffer, tf);
+@@ -373,6 +392,14 @@ static bool scene_buffer_point_accepts_input(struct wlr_scene_buffer *scene_buff
+ 	struct wlr_scene_surface *scene_surface =
+ 		wlr_scene_surface_try_from_buffer(scene_buffer);
+ 
++	// Surface-local coordinates for scale-overridden clients are in their
++	// native (denser) space. The rewritten values propagate out of
++	// wlr_scene_node_at(), so input events reach the client pre-scaled.
++	double server_scale = wlr_server_scale_get(
++		wl_resource_get_client(scene_surface->surface->resource));
++	*sx *= server_scale;
++	*sy *= server_scale;
++
+ 	*sx += scene_surface->clip.x;
+ 	*sy += scene_surface->clip.y;
+ 
+diff --git a/types/wlr_xdg_output_v1.c b/types/wlr_xdg_output_v1.c
+index 2621239..d2786df 100644
+--- a/types/wlr_xdg_output_v1.c
++++ b/types/wlr_xdg_output_v1.c
+@@ -1,10 +1,12 @@
+ #include <assert.h>
++#include <math.h>
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include <wlr/types/wlr_output_layout.h>
+ #include <wlr/types/wlr_output.h>
+ #include <wlr/types/wlr_xdg_output_v1.h>
+ #include <wlr/util/log.h>
++#include <wlr/util/server_scale.h>
+ #include "xdg-output-unstable-v1-protocol.h"
+ 
+ #define OUTPUT_MANAGER_VERSION 3
+@@ -26,15 +28,29 @@ static void output_handle_resource_destroy(struct wl_resource *resource) {
+ 
+ static void output_send_details(struct wlr_xdg_output_v1 *xdg_output,
+ 		struct wl_resource *resource) {
++	// Scale-overridden clients (Xwayland with "clients scale themselves") see
++	// logical geometry in their native (denser) coordinate space.
++	double scale = wlr_server_scale_get(wl_resource_get_client(resource));
+ 	zxdg_output_v1_send_logical_position(resource,
+-		xdg_output->x, xdg_output->y);
++		round(xdg_output->x * scale), round(xdg_output->y * scale));
+ 	zxdg_output_v1_send_logical_size(resource,
+-		xdg_output->width, xdg_output->height);
++		round(xdg_output->width * scale), round(xdg_output->height * scale));
+ 	if (wl_resource_get_version(resource) < OUTPUT_DONE_DEPRECATED_SINCE_VERSION) {
+ 		zxdg_output_v1_send_done(resource);
+ 	}
+ }
+ 
++void wlr_xdg_output_manager_v1_resend(struct wlr_xdg_output_manager_v1 *manager) {
++	struct wlr_xdg_output_v1 *xdg_output;
++	wl_list_for_each(xdg_output, &manager->outputs, link) {
++		struct wl_resource *resource;
++		wl_resource_for_each(resource, &xdg_output->resources) {
++			output_send_details(xdg_output, resource);
++		}
++		wlr_output_schedule_done(xdg_output->layout_output->output);
++	}
++}
++
+ static void output_update(struct wlr_xdg_output_v1 *xdg_output) {
+ 	struct wlr_output_layout_output *layout_output = xdg_output->layout_output;
+ 	bool updated = false;
+diff --git a/util/meson.build b/util/meson.build
+index 6aad133..baba0ab 100644
+--- a/util/meson.build
++++ b/util/meson.build
+@@ -9,6 +9,7 @@ wlr_files += files(
+ 	'mem.c',
+ 	'rect_union.c',
+ 	'region.c',
++	'server_scale.c',
+ 	'set.c',
+ 	'shm.c',
+ 	'time.c',
+diff --git a/util/server_scale.c b/util/server_scale.c
+new file mode 100644
+index 0000000..5eb1858
+--- /dev/null
++++ b/util/server_scale.c
+@@ -0,0 +1,35 @@
++#include <assert.h>
++#include <wayland-server-core.h>
++#include <wlr/util/server_scale.h>
++
++static struct wl_client *scaled_client = NULL;
++static double scaled_client_scale = 1.0;
++static struct wl_listener scaled_client_destroy;
++
++static void handle_scaled_client_destroy(struct wl_listener *listener, void *data) {
++	wl_list_remove(&scaled_client_destroy.link);
++	scaled_client = NULL;
++	scaled_client_scale = 1.0;
++}
++
++void wlr_server_scale_set(struct wl_client *client, double scale) {
++	assert(scale > 0);
++	if (scaled_client != NULL) {
++		wl_list_remove(&scaled_client_destroy.link);
++		scaled_client = NULL;
++		scaled_client_scale = 1.0;
++	}
++	if (client != NULL) {
++		scaled_client = client;
++		scaled_client_scale = scale;
++		scaled_client_destroy.notify = handle_scaled_client_destroy;
++		wl_client_add_destroy_listener(client, &scaled_client_destroy);
++	}
++}
++
++double wlr_server_scale_get(const struct wl_client *client) {
++	if (client != NULL && client == scaled_client) {
++		return scaled_client_scale;
++	}
++	return 1.0;
++}
+-- 
+2.54.0
+
