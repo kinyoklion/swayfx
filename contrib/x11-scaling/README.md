@@ -28,7 +28,7 @@ mechanism is:
 
 | Path | Purpose |
 |---|---|
-| `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the release tag in `wlroots/UPSTREAM_REV` (wlroots 0.20.0). scenefx needs no patch: it reuses wlroots' own scene-surface code (`types/scene/surface.c`), which is where the scene-side change lives. |
+| `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the release tag in `wlroots/UPSTREAM_REV` (wlroots 0.20.2). scenefx needs no patch: it reuses wlroots' own scene-surface code (`types/scene/surface.c`), which is where the scene-side change lives. |
 | `sway-xwayland-setup` | Helper for `xwayland_scale_command`: merges `Xft.dpi = 96*S` and `Xcursor.size = base*S` into the X resource database with `xrdb`. |
 | `nested-test.conf` | Config for trying the feature nested inside an existing session. |
 
@@ -70,7 +70,7 @@ let
     rev = "<contents of contrib/x11-scaling/wlroots/UPSTREAM_REV>"; hash = "<sha256>";
   };
   wlroots-x11scale = pkgs.wlroots_0_20.overrideAttrs (old: {
-    src = wlrootsSrc; # 0.20.0
+    src = wlrootsSrc; # 0.20.2
     patches = (old.patches or [ ]) ++ [ "${swaySrc}/contrib/x11-scaling/wlroots/0001-Add-server-side-per-client-scale-override-for-Xwayla.patch" ];
   });
   swayfx-x11scale-unwrapped = (pkgs.swayfx-unwrapped.override { wlroots_0_19 = wlroots-x11scale; scenefx = scenefx-0_5; })
@@ -102,9 +102,10 @@ with `xwayland_scaling auto`. `Mod4+Return` starts `xterm`, `Mod4+d` prints
 ## Updating the wlroots patch
 
 From a checkout of <https://github.com/kinyoklion/wlroots>, branch
-`x11-scaling-0.20`:
+`x11-scaling-0.20` (`x11-scaling-0.20^` is the feature commit; the branch tip
+only adds the fork notice to the README):
 
 ```
-git format-patch -o ../swayfx/contrib/x11-scaling/wlroots 0.20.0..x11-scaling-0.20
-echo 0.20.0 > ../swayfx/contrib/x11-scaling/wlroots/UPSTREAM_REV
+git format-patch -1 -o ../swayfx/contrib/x11-scaling/wlroots x11-scaling-0.20^
+echo 0.20.2 > ../swayfx/contrib/x11-scaling/wlroots/UPSTREAM_REV
 ```

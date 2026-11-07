@@ -1,4 +1,4 @@
-From d2ffb75b6d4b5c4d785418feb2b0b95920425d78 Mon Sep 17 00:00:00 2001
+From 8c89526f729f9d9290cf4e5bcde3148fe1094d9c Mon Sep 17 00:00:00 2001
 From: Ryan Lamb <4955475+kinyoklion@users.noreply.github.com>
 Date: Fri, 16 Oct 2026 16:17:32 -0700
 Subject: [PATCH] Add server-side per-client scale override for Xwayland
@@ -29,7 +29,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
  create mode 100644 util/server_scale.c
 
 diff --git a/include/wlr/types/wlr_xdg_output_v1.h b/include/wlr/types/wlr_xdg_output_v1.h
-index 4ee8ec3..48c2c1a 100644
+index 4ee8ec3b..48c2c1a8 100644
 --- a/include/wlr/types/wlr_xdg_output_v1.h
 +++ b/include/wlr/types/wlr_xdg_output_v1.h
 @@ -48,4 +48,11 @@ struct wlr_xdg_output_manager_v1 {
@@ -46,7 +46,7 @@ index 4ee8ec3..48c2c1a 100644
  #endif
 diff --git a/include/wlr/util/server_scale.h b/include/wlr/util/server_scale.h
 new file mode 100644
-index 0000000..80bd142
+index 00000000..80bd1425
 --- /dev/null
 +++ b/include/wlr/util/server_scale.h
 @@ -0,0 +1,33 @@
@@ -84,7 +84,7 @@ index 0000000..80bd142
 +
 +#endif
 diff --git a/types/scene/surface.c b/types/scene/surface.c
-index e6ea133..6d351ab 100644
+index 89c54a9e..dc9ed332 100644
 --- a/types/scene/surface.c
 +++ b/types/scene/surface.c
 @@ -10,6 +10,8 @@
@@ -96,7 +96,7 @@ index e6ea133..6d351ab 100644
  #include <wlr/util/transform.h>
  #include "types/wlr_scene.h"
  
-@@ -132,9 +134,13 @@ static void handle_scene_buffer_outputs_update(
+@@ -143,9 +145,13 @@ static void handle_scene_buffer_outputs_update(
  		wlr_surface_send_enter(surface->surface, event->active[i]->output);
  	}
  
@@ -113,7 +113,7 @@ index e6ea133..6d351ab 100644
  
  	if (scene->color_manager_v1 != NULL) {
  		struct wlr_image_description_v1_data img_desc = {0};
-@@ -298,9 +304,22 @@ static void surface_reconfigure(struct wlr_scene_surface *scene_surface) {
+@@ -309,9 +315,22 @@ static void surface_reconfigure(struct wlr_scene_surface *scene_surface) {
  		}
  	}
  
@@ -137,7 +137,7 @@ index e6ea133..6d351ab 100644
  	wlr_scene_buffer_set_transform(scene_buffer, state->transform);
  	wlr_scene_buffer_set_opacity(scene_buffer, opacity);
  	wlr_scene_buffer_set_transfer_function(scene_buffer, tf);
-@@ -373,6 +392,14 @@ static bool scene_buffer_point_accepts_input(struct wlr_scene_buffer *scene_buff
+@@ -383,6 +402,14 @@ static bool scene_buffer_point_accepts_input(struct wlr_scene_buffer *scene_buff
  	struct wlr_scene_surface *scene_surface =
  		wlr_scene_surface_try_from_buffer(scene_buffer);
  
@@ -153,7 +153,7 @@ index e6ea133..6d351ab 100644
  	*sy += scene_surface->clip.y;
  
 diff --git a/types/wlr_xdg_output_v1.c b/types/wlr_xdg_output_v1.c
-index 2621239..d2786df 100644
+index 26212398..d2786df4 100644
 --- a/types/wlr_xdg_output_v1.c
 +++ b/types/wlr_xdg_output_v1.c
 @@ -1,10 +1,12 @@
@@ -202,10 +202,10 @@ index 2621239..d2786df 100644
  	struct wlr_output_layout_output *layout_output = xdg_output->layout_output;
  	bool updated = false;
 diff --git a/util/meson.build b/util/meson.build
-index 6aad133..baba0ab 100644
+index 7d3f39d2..ced2f141 100644
 --- a/util/meson.build
 +++ b/util/meson.build
-@@ -9,6 +9,7 @@ wlr_files += files(
+@@ -10,6 +10,7 @@ wlr_files += files(
  	'mem.c',
  	'rect_union.c',
  	'region.c',
@@ -215,7 +215,7 @@ index 6aad133..baba0ab 100644
  	'time.c',
 diff --git a/util/server_scale.c b/util/server_scale.c
 new file mode 100644
-index 0000000..5eb1858
+index 00000000..5eb18586
 --- /dev/null
 +++ b/util/server_scale.c
 @@ -0,0 +1,35 @@
