@@ -32,6 +32,15 @@ the patch file in `contrib/x11-scaling/wlroots/`. The same change is in the
 [kinyoklion/wlroots](https://github.com/kinyoklion/wlroots). A change to
 scenefx is not necessary.
 
+The directory `contrib/x11-scaling/wlroots/` also has a second wlroots patch,
+`0002-*.patch`. This patch is not part of the X11 scaling feature, and it is
+optional. It corrects the hardware cursor in virtual machines. On virtio-gpu
+with virgl, standard wlroots shows the cursor upside down, and the active
+point of the cursor is not at its tip. With the patch, wlroots copies the
+cursor image into a DRM dumb buffer on virtual GPUs. KDE Plasma uses the same
+method. `WLR_DRM_DUMB_CURSORS=0` disables this behavior.
+`WLR_DRM_DUMB_CURSORS=1` enables it on all GPUs.
+
 ## Branches
 
 - `master` is the default branch. It has upstream SwayFX and the feature.

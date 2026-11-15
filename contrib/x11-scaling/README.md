@@ -12,7 +12,7 @@ is identical to upstream swayfx.
 Research and design notes live outside this repo; the short version of the
 mechanism is:
 
-- wlroots (`wlroots/*.patch`): `wlr_server_scale_set(client, S)` marks one
+- wlroots (`wlroots/0001-*.patch`): `wlr_server_scale_set(client, S)` marks one
   `wl_client` (the Xwayland connection). Its buffers are displayed at `1/S`
   (scene dest size + opaque region), surface-local input coordinates are
   multiplied by `S`, xdg-output logical geometry is sent multiplied by `S`,
@@ -29,6 +29,7 @@ mechanism is:
 | Path | Purpose |
 |---|---|
 | `wlroots/0001-*.patch` | Required companion patch for wlroots. Applies on top of the release tag in `wlroots/UPSTREAM_REV` (wlroots 0.20.2). scenefx needs no patch: it reuses wlroots' own scene-surface code (`types/scene/surface.c`), which is where the scene-side change lives. |
+| `wlroots/0002-*.patch` | Optional, independent of `xwayland_scaling`. Applies on top of `0001`. On virtual GPUs (`virtio_gpu`, `qxl`, `vmwgfx`, `vboxvideo`), hardware cursor images are rendered as usual and then copied into DRM dumb buffers, like KWin does. Without it, virtio-gpu + virgl hosts show the cursor upside down with its hotspot above the arrow. `WLR_DRM_DUMB_CURSORS=0/1` overrides the detection. |
 | `sway-xwayland-setup` | Helper for `xwayland_scale_command`: merges `Xft.dpi = 96*S` and `Xcursor.size = base*S` into the X resource database with `xrdb`. |
 | `nested-test.conf` | Config for trying the feature nested inside an existing session. |
 
@@ -43,7 +44,7 @@ See `sway(5)` for the full description of both commands.
 
 ## Building
 
-swayfx on this branch requires wlroots 0.20.x **with the patch applied**
+swayfx on this branch requires wlroots 0.20.x **with the patches applied**
 (scenefx 0.5 unpatched, built against that wlroots):
 
 ```
@@ -58,7 +59,8 @@ against an installed patched wlroots or with `subprojects/wlroots` pointing
 at the patched checkout.
 
 The `x11-scaling-0.20` branch of <https://github.com/kinyoklion/wlroots> already
-has this patch. As an alternative, clone that branch and do not apply the patch.
+has these patches. As an alternative, clone that branch and do not apply the
+patches.
 
 ### NixOS sketch
 
@@ -71,7 +73,11 @@ let
   };
   wlroots-x11scale = pkgs.wlroots_0_20.overrideAttrs (old: {
     src = wlrootsSrc; # 0.20.2
-    patches = (old.patches or [ ]) ++ [ "${swaySrc}/contrib/x11-scaling/wlroots/0001-Add-server-side-per-client-scale-override-for-Xwayla.patch" ];
+    patches = (old.patches or [ ]) ++ [
+      "${swaySrc}/contrib/x11-scaling/wlroots/0001-Add-server-side-per-client-scale-override-for-Xwayla.patch"
+      # Optional: correct hardware cursor in virtual machines
+      "${swaySrc}/contrib/x11-scaling/wlroots/0002-output-cursor-copy-cursor-images-into-dumb-buffers-o.patch"
+    ];
   });
   swayfx-x11scale-unwrapped = (pkgs.swayfx-unwrapped.override { wlroots_0_19 = wlroots-x11scale; scenefx = scenefx-0_5; })
     .overrideAttrs (old: { version = "git-x11scale"; src = swaySrc; });
@@ -99,13 +105,14 @@ with `xwayland_scaling auto`. `Mod4+Return` starts `xterm`, `Mod4+d` prints
 - Drag-and-drop and mixed-scale multi-output setups are not verified yet.
 - The wlroots hook is a single-client global, not an upstream-shaped API.
 
-## Updating the wlroots patch
+## Updating the wlroots patches
 
 From a checkout of <https://github.com/kinyoklion/wlroots>, branch
-`x11-scaling-0.20` (`x11-scaling-0.20^` is the feature commit; the branch tip
-only adds the fork notice to the README):
+`x11-scaling-0.20`. Each patch is one commit on top of the `0.20.2` tag; one
+more commit only adds the fork notice to the README and is skipped here:
 
 ```
-git format-patch -1 -o ../swayfx/contrib/x11-scaling/wlroots x11-scaling-0.20^
+git format-patch -o ../swayfx/contrib/x11-scaling/wlroots \
+    0.20.2..x11-scaling-0.20 -- . ':(exclude)README.md'
 echo 0.20.2 > ../swayfx/contrib/x11-scaling/wlroots/UPSTREAM_REV
 ```

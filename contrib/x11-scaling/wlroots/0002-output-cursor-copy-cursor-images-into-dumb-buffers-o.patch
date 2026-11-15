@@ -1,0 +1,360 @@
+From da6b1ed63518f510aded7b9d636ff411d5d611a4 Mon Sep 17 00:00:00 2001
+From: Ryan Lamb <4955475+kinyoklion@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 19:26:36 -0800
+Subject: [PATCH] output/cursor: copy cursor images into dumb buffers on
+ virtual GPUs
+
+On virtual GPUs the cursor plane is not scanned out. The hypervisor
+fetches the cursor image and shows it as the host's own pointer. With
+virtio-gpu and virgl, the host reads a GPU-rendered cursor buffer back
+upside down: the pointer is drawn flipped, its hotspot sits above the
+visible arrow, and it can extend outside the VM window.
+
+KWin avoids this on virtual machines by rendering the cursor with GL,
+reading it back and handing a DRM dumb buffer to the cursor plane
+(BufferTarget::Dumb). virtio-gpu uploads dumb cursor buffers to the
+host with a plain CPU transfer.
+
+Do the same. The DRM backend flags outputs on virtio_gpu, qxl, vmwgfx
+and vboxvideo (KWin's list), and render_cursor_buffer() then reads the
+rendered cursor back with wlr_texture_read_pixels() into a dumb buffer
+from a separate swapchain. If any step fails, that cursor image falls
+back to a software cursor. WLR_DRM_DUMB_CURSORS=0/1 overrides the
+detection.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ backend/drm/backend.c               |  31 +++++++++
+ backend/drm/drm.c                   |   2 +
+ include/backend/drm/drm.h           |   3 +
+ include/render/allocator/drm_dumb.h |   8 +++
+ include/wlr/types/wlr_output.h      |   6 ++
+ render/allocator/allocator.c        |  12 ++++
+ types/output/cursor.c               | 103 ++++++++++++++++++++++++++++
+ types/output/output.c               |   4 ++
+ types/output/render.c               |   3 +
+ 9 files changed, 172 insertions(+)
+
+diff --git a/backend/drm/backend.c b/backend/drm/backend.c
+index 5a545b19..0ffc1f6e 100644
+--- a/backend/drm/backend.c
++++ b/backend/drm/backend.c
+@@ -12,6 +12,7 @@
+ #include "backend/drm/drm.h"
+ #include "backend/drm/fb.h"
+ #include "render/drm_format_set.h"
++#include "util/env.h"
+ 
+ struct wlr_drm_backend *get_drm_backend_from_backend(
+ 		struct wlr_backend *wlr_backend) {
+@@ -205,6 +206,22 @@ static bool init_mgpu_renderer(struct wlr_drm_backend *drm) {
+ 	return true;
+ }
+ 
++static bool is_virtual_gpu_driver(const char *driver) {
++	// Same set of drivers as KWin's DrmGpu::isVirtualMachine()
++	static const char *const drivers[] = {
++		"virtio_gpu",
++		"qxl",
++		"vmwgfx",
++		"vboxvideo",
++	};
++	for (size_t i = 0; i < sizeof(drivers) / sizeof(drivers[0]); i++) {
++		if (strcmp(driver, drivers[i]) == 0) {
++			return true;
++		}
++	}
++	return false;
++}
++
+ struct wlr_backend *wlr_drm_backend_create(struct wlr_session *session,
+ 		struct wlr_device *dev, struct wlr_backend *parent) {
+ 	assert(session && dev);
+@@ -223,6 +240,7 @@ struct wlr_backend *wlr_drm_backend_create(struct wlr_session *session,
+ 		return NULL;
+ 	}
+ 	wlr_log(WLR_INFO, "Initializing DRM backend for %s (%s)", name, version->name);
++	bool virtual_gpu = is_virtual_gpu_driver(version->name);
+ 	drmFreeVersion(version);
+ 
+ 	struct wlr_drm_backend *drm = calloc(1, sizeof(*drm));
+@@ -250,6 +268,19 @@ struct wlr_backend *wlr_drm_backend_create(struct wlr_session *session,
+ 		wl_signal_add(&parent->events.destroy, &drm->parent_destroy);
+ 	} else {
+ 		wl_list_init(&drm->parent_destroy.link);
++
++		// Virtual GPUs hand the cursor image to the hypervisor, which shows
++		// it as the host pointer; GPU-rendered cursor buffers can come out
++		// flipped there (virtio-gpu + virgl), so copy them into dumb buffers
++		if (getenv("WLR_DRM_DUMB_CURSORS") != NULL) {
++			drm->cursor_dumb_copy = env_parse_bool("WLR_DRM_DUMB_CURSORS");
++		} else {
++			drm->cursor_dumb_copy = virtual_gpu;
++		}
++		if (drm->cursor_dumb_copy) {
++			wlr_log(WLR_INFO, "Copying hardware cursor images into "
++				"DRM dumb buffers on %s", name);
++		}
+ 	}
+ 
+ 	drm->dev_change.notify = handle_dev_change;
+diff --git a/backend/drm/drm.c b/backend/drm/drm.c
+index bd29872f..80b38d3a 100644
+--- a/backend/drm/drm.c
++++ b/backend/drm/drm.c
+@@ -1697,6 +1697,8 @@ static bool connect_drm_connector(struct wlr_drm_connector *wlr_conn,
+ 	wlr_output_init(output, &drm->backend, &output_impl, drm->session->event_loop, &state);
+ 	wlr_output_state_finish(&state);
+ 
++	output->cursor_dumb_copy = drm->cursor_dumb_copy;
++
+ 	// fill out the modes
+ 	wl_list_insert_list(&output->modes, &modes);
+ 
+diff --git a/include/backend/drm/drm.h b/include/backend/drm/drm.h
+index a8c5e077..2f84743b 100644
+--- a/include/backend/drm/drm.h
++++ b/include/backend/drm/drm.h
+@@ -129,6 +129,9 @@ struct wlr_drm_backend {
+ 	struct wlr_drm_format_set mgpu_formats;
+ 
+ 	bool supports_tearing_page_flips;
++
++	// Virtual GPU: copy hardware cursor images into DRM dumb buffers
++	bool cursor_dumb_copy;
+ };
+ 
+ struct wlr_drm_mode {
+diff --git a/include/render/allocator/drm_dumb.h b/include/render/allocator/drm_dumb.h
+index f505d651..6c78221a 100644
+--- a/include/render/allocator/drm_dumb.h
++++ b/include/render/allocator/drm_dumb.h
+@@ -34,4 +34,12 @@ struct wlr_drm_dumb_allocator {
+  */
+ struct wlr_allocator *wlr_drm_dumb_allocator_create(int fd);
+ 
++/**
++ * Creates a new drm dumb allocator on a re-opened node of the DRM device
++ * behind drm_fd (a primary node, authenticated if drm_fd is DRM master).
++ *
++ * Does not take ownership over drm_fd.
++ */
++struct wlr_allocator *allocator_create_drm_dumb(int drm_fd);
++
+ #endif
+diff --git a/include/wlr/types/wlr_output.h b/include/wlr/types/wlr_output.h
+index 4485b369..b6dc1eea 100644
+--- a/include/wlr/types/wlr_output.h
++++ b/include/wlr/types/wlr_output.h
+@@ -271,6 +271,12 @@ struct wlr_output {
+ 		struct wlr_output_image_description image_description_value;
+ 		struct wlr_color_transform *color_transform;
+ 		struct wlr_color_primaries default_primaries_value;
++
++		// Set by the DRM backend on virtual GPUs: hardware cursor images are
++		// rendered as usual, then copied on the CPU into DRM dumb buffers
++		bool cursor_dumb_copy;
++		struct wlr_allocator *cursor_dumb_allocator;
++		struct wlr_swapchain *cursor_dumb_swapchain;
+ 	} WLR_PRIVATE;
+ };
+ 
+diff --git a/render/allocator/allocator.c b/render/allocator/allocator.c
+index b7dbf3d6..37781fa5 100644
+--- a/render/allocator/allocator.c
++++ b/render/allocator/allocator.c
+@@ -95,6 +95,18 @@ static int reopen_drm_node(int drm_fd, bool allow_render_node) {
+ 	return new_fd;
+ }
+ 
++struct wlr_allocator *allocator_create_drm_dumb(int drm_fd) {
++	int dumb_fd = reopen_drm_node(drm_fd, false);
++	if (dumb_fd < 0) {
++		return NULL;
++	}
++	struct wlr_allocator *alloc = wlr_drm_dumb_allocator_create(dumb_fd);
++	if (alloc == NULL) {
++		close(dumb_fd);
++	}
++	return alloc;
++}
++
+ struct wlr_allocator *wlr_allocator_autocreate(struct wlr_backend *backend,
+ 		struct wlr_renderer *renderer) {
+ 	uint32_t backend_caps = backend->buffer_caps;
+diff --git a/types/output/cursor.c b/types/output/cursor.c
+index 5e93b0b2..45ca7c46 100644
+--- a/types/output/cursor.c
++++ b/types/output/cursor.c
+@@ -1,6 +1,7 @@
+ #include <assert.h>
+ #include <drm_fourcc.h>
+ #include <stdlib.h>
++#include <wlr/backend.h>
+ #include <wlr/interfaces/wlr_output.h>
+ #include <wlr/render/allocator.h>
+ #include <wlr/render/swapchain.h>
+@@ -10,7 +11,9 @@
+ #include <wlr/util/log.h>
+ #include <wlr/util/region.h>
+ #include <wlr/util/transform.h>
++#include "render/allocator/drm_dumb.h"
+ #include "render/color.h"
++#include "render/drm_format_set.h"
+ #include "types/wlr_buffer.h"
+ #include "types/wlr_output.h"
+ 
+@@ -182,6 +185,97 @@ static bool output_pick_cursor_format(struct wlr_output *output,
+ 	return output_pick_format(output, display_formats, format, DRM_FORMAT_ARGB8888);
+ }
+ 
++/**
++ * Copy a GPU-rendered cursor buffer into a CPU-written DRM dumb buffer.
++ *
++ * On virtual GPUs the cursor plane is not scanned out: the hypervisor fetches
++ * the cursor image and shows it as the host's own pointer. With virtio-gpu and
++ * virgl, the host reads a GPU-rendered cursor buffer back upside down, so the
++ * pointer appears flipped and offset from its hotspot. Dumb buffers go through
++ * the driver's plain CPU upload path instead. KWin does the same for virtual
++ * machines (BufferTarget::Dumb + glReadnPixels).
++ */
++static struct wlr_buffer *copy_cursor_buffer_to_dumb(struct wlr_output *output,
++		struct wlr_buffer *src) {
++	if (output->cursor_dumb_allocator == NULL) {
++		int drm_fd = wlr_backend_get_drm_fd(output->backend);
++		if (drm_fd < 0) {
++			return NULL;
++		}
++		output->cursor_dumb_allocator = allocator_create_drm_dumb(drm_fd);
++		if (output->cursor_dumb_allocator == NULL) {
++			wlr_log(WLR_ERROR, "Failed to create DRM dumb allocator for cursor");
++			return NULL;
++		}
++	}
++
++	struct wlr_dmabuf_attributes attribs;
++	if (!wlr_buffer_get_dmabuf(src, &attribs)) {
++		wlr_log(WLR_DEBUG, "Cursor buffer is not a DMA-BUF, cannot copy it");
++		return NULL;
++	}
++
++	struct wlr_swapchain *swapchain = output->cursor_dumb_swapchain;
++	if (swapchain == NULL || swapchain->width != src->width ||
++			swapchain->height != src->height ||
++			swapchain->format.format != attribs.format) {
++		struct wlr_drm_format format = {0};
++		wlr_drm_format_init(&format, attribs.format);
++		if (!wlr_drm_format_add(&format, DRM_FORMAT_MOD_LINEAR)) {
++			wlr_drm_format_finish(&format);
++			return NULL;
++		}
++
++		wlr_swapchain_destroy(output->cursor_dumb_swapchain);
++		output->cursor_dumb_swapchain = wlr_swapchain_create(
++			output->cursor_dumb_allocator, src->width, src->height, &format);
++		wlr_drm_format_finish(&format);
++		if (output->cursor_dumb_swapchain == NULL) {
++			wlr_log(WLR_ERROR, "Failed to create cursor dumb buffer swapchain");
++			return NULL;
++		}
++		swapchain = output->cursor_dumb_swapchain;
++	}
++
++	struct wlr_texture *texture = wlr_texture_from_buffer(output->renderer, src);
++	if (texture == NULL) {
++		wlr_log(WLR_ERROR, "Failed to import cursor buffer for read-back");
++		return NULL;
++	}
++
++	struct wlr_buffer *dst = wlr_swapchain_acquire(swapchain);
++	if (dst == NULL) {
++		wlr_texture_destroy(texture);
++		return NULL;
++	}
++
++	void *data;
++	uint32_t format;
++	size_t stride;
++	if (!wlr_buffer_begin_data_ptr_access(dst, WLR_BUFFER_DATA_PTR_ACCESS_WRITE,
++			&data, &format, &stride)) {
++		wlr_texture_destroy(texture);
++		wlr_buffer_unlock(dst);
++		return NULL;
++	}
++
++	bool ok = wlr_texture_read_pixels(texture, &(struct wlr_texture_read_pixels_options){
++		.data = data,
++		.format = format,
++		.stride = stride,
++	});
++	wlr_buffer_end_data_ptr_access(dst);
++	wlr_texture_destroy(texture);
++
++	if (!ok) {
++		wlr_log(WLR_ERROR, "Failed to read back cursor pixels");
++		wlr_buffer_unlock(dst);
++		return NULL;
++	}
++
++	return dst;
++}
++
+ static struct wlr_buffer *render_cursor_buffer(struct wlr_output_cursor *cursor) {
+ 	struct wlr_output *output = cursor->output;
+ 
+@@ -286,6 +380,15 @@ static struct wlr_buffer *render_cursor_buffer(struct wlr_output_cursor *cursor)
+ 		return NULL;
+ 	}
+ 
++	// A CPU-accessible allocator (e.g. pixman + dumb buffers) already wrote
++	// the pixels from the CPU, so there is nothing to copy
++	if (output->cursor_dumb_copy &&
++			!(allocator->buffer_caps & WLR_BUFFER_CAP_DATA_PTR)) {
++		struct wlr_buffer *copy = copy_cursor_buffer_to_dumb(output, buffer);
++		wlr_buffer_unlock(buffer);
++		return copy;
++	}
++
+ 	return buffer;
+ }
+ 
+diff --git a/types/output/output.c b/types/output/output.c
+index 3715950c..e45e6780 100644
+--- a/types/output/output.c
++++ b/types/output/output.c
+@@ -266,6 +266,8 @@ static void output_apply_state(struct wlr_output *output,
+ 		output->swapchain = NULL;
+ 		wlr_swapchain_destroy(output->cursor_swapchain);
+ 		output->cursor_swapchain = NULL;
++		wlr_swapchain_destroy(output->cursor_dumb_swapchain);
++		output->cursor_dumb_swapchain = NULL;
+ 	}
+ 
+ 	if (state->committed & WLR_OUTPUT_STATE_LAYERS) {
+@@ -420,7 +422,9 @@ void wlr_output_finish(struct wlr_output *output) {
+ 	}
+ 
+ 	wlr_swapchain_destroy(output->cursor_swapchain);
++	wlr_swapchain_destroy(output->cursor_dumb_swapchain);
+ 	wlr_buffer_unlock(output->cursor_front_buffer);
++	wlr_allocator_destroy(output->cursor_dumb_allocator);
+ 	wlr_color_transform_unref(output->color_transform);
+ 
+ 	wlr_swapchain_destroy(output->swapchain);
+diff --git a/types/output/render.c b/types/output/render.c
+index 155da5cf..1d945291 100644
+--- a/types/output/render.c
++++ b/types/output/render.c
+@@ -32,6 +32,9 @@ bool wlr_output_init_render(struct wlr_output *output,
+ 	wlr_swapchain_destroy(output->cursor_swapchain);
+ 	output->cursor_swapchain = NULL;
+ 
++	wlr_swapchain_destroy(output->cursor_dumb_swapchain);
++	output->cursor_dumb_swapchain = NULL;
++
+ 	output->allocator = allocator;
+ 	output->renderer = renderer;
+ 
+-- 
+2.47.3
+
