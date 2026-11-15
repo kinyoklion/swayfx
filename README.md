@@ -54,6 +54,14 @@ method. `WLR_DRM_DUMB_CURSORS=0` disables this behavior.
 - [kinyoklion/wlroots](https://github.com/kinyoklion/wlroots): wlroots with
   the necessary change.
 
+## Installation on Debian 13
+
+Debian 13 does not have the necessary versions of wlroots and some other
+libraries. [INSTALL-deb-fork.md](INSTALL-deb-fork.md) gives the full
+procedure. The procedure builds these libraries together with SwayFX and
+installs all of them in `/opt/swayfx`. The upstream guide, `INSTALL-deb.md`,
+does not work for this fork.
+
 ## More information
 
 Read [contrib/x11-scaling/README.md](contrib/x11-scaling/README.md). It gives
